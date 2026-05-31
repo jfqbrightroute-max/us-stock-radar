@@ -158,6 +158,7 @@ show_all_signals = st.sidebar.checkbox(
 )
 
 run_button = st.sidebar.button("开始扫描")
+auto_run = True
 
 st.sidebar.divider()
 st.sidebar.caption("数据源：yfinance")
@@ -166,7 +167,7 @@ st.sidebar.caption("第一版仅用于个人研究，不适合实时交易。")
 # -----------------------------
 # 主页面
 # -----------------------------
-if run_button:
+if auto_run or run_button:
     with st.spinner("正在下载行情并扫描，请稍等..."):
         raw_data = download_price_data(tickers)
         result_df = run_scan(tickers, raw_data)
