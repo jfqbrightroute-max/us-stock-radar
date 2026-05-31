@@ -122,7 +122,16 @@ def analyze_one_ticker(ticker, data):
 
         latest_close = close.iloc[-1]
         prev_close = close.iloc[-2]
+       
+        # 基础过滤：避免低价、低流动性股票
+        avg_dollar_volume_20 = (close.iloc[-21:-1] * volume.iloc[-21:-1]).mean()
 
+        if latest_close < 2:
+            return None
+
+        if avg_dollar_volume_20 < 3_000_000:
+            return None
+        
         one_day_return = latest_close / prev_close - 1
         five_day_return = latest_close / close.iloc[-6] - 1
         twenty_day_return = latest_close / close.iloc[-21] - 1
