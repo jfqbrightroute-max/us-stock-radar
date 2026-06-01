@@ -38,12 +38,13 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
 
+          git pull --rebase origin main
+
           git add data/latest_results.csv data/latest_status.json
 
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
             git commit -m "update daily scan results"
-            git pull --rebase origin main
             git push origin main
           fi
