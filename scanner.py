@@ -82,10 +82,10 @@ def analyze_one_ticker(ticker, df):
         avg_dollar_volume_20 = (close.iloc[-21:-1] * volume.iloc[-21:-1]).mean()
 
         # 基础过滤：去掉低价、低流动性股票
-        if latest_close < 2:
+        if latest_close < 5:
             return None
 
-        if avg_dollar_volume_20 < 3_000_000:
+        if avg_dollar_volume_20 < 10_000_000:
             return None
 
         one_day_return = latest_close / prev_close - 1
