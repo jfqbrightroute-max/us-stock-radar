@@ -135,6 +135,8 @@ else:
             f" 可以等待 GitHub Actions 自动运行，或手动运行 daily scan。"
         )
 
+    filtered_df = df.copy()
+
     filtered_df = filtered_df[filtered_df["5日涨幅"] >= min_5d_return / 100]
 
     if signal_keyword != "全部":
