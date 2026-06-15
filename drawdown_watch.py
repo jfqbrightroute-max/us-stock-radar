@@ -99,6 +99,11 @@ def load_all_drawdowns(tickers, period):
     return rows, errors
 
 
+def remove_from_watchlist(ticker):
+    current = parse_tickers(st.session_state.get("current_watchlist", ""))
+    st.session_state.current_watchlist = ",".join(item for item in current if item != ticker)
+
+
 def render_drawdown_watch():
     st.subheader("关注股票回撤提醒")
     st.caption("上传最新关注列表后，系统会抓取历史行情，并检查股票是否自周期高点回落达到 20%。")
@@ -151,6 +156,32 @@ def render_drawdown_watch():
                 )
         except Exception as exc:
             st.error(f"关注列表导入失败：{exc}")
+
+    st.markdown("#### 添加新的关注股票")
+    add_col, add_button_col = st.columns([4, 1])
+    with add_col:
+        new_ticker = st.text_input(
+            "输入股票代码",
+            placeholder="例如：TSLA",
+            label_visibility="collapsed",
+            key="new_watch_ticker",
+        )
+    with add_button_col:
+        add_clicked = st.button("添加股票", use_container_width=True, type="primary")
+
+    if add_clicked:
+        additions = parse_tickers(new_ticker)
+        if not additions:
+            st.warning("请输入有效的股票代码。")
+        else:
+            current = parse_tickers(st.session_state.current_watchlist)
+            new_items = [ticker for ticker in additions if ticker not in current]
+            st.session_state.current_watchlist = ",".join(current + new_items)
+            if new_items:
+                st.success(f"已添加：{'、'.join(new_items)}")
+            else:
+                st.info("这些股票已经在关注列表中。")
+            st.rerun()
 
     ticker_text = st.text_area(
         "当前关注列表",
@@ -205,6 +236,31 @@ def render_drawdown_watch():
     metric2.metric("触发提醒数", len(alerts))
     metric3.metric("最大回撤", f"{result['距高点回撤'].min():.1f}%")
 
+    st.markdown("#### 检测结果与关注管理")
+    header = st.columns([1.2, 1.3, 1.3, 1.4, 1.4, 1])
+    for column, label in zip(header, ["代码", "最新价", "周期高点", "距高点回撤", "状态", "操作"]):
+        column.markdown(f"**{label}**")
+
+    alert_tickers = {row["Ticker"] for row in alerts}
+    for row in sorted(rows, key=lambda item: item["距高点回撤"]):
+        columns = st.columns([1.2, 1.3, 1.3, 1.4, 1.4, 1])
+        columns[0].write(row["Ticker"])
+        columns[1].write(f"{row['最新价']:.2f}")
+        columns[2].write(f"{row['周期高点']:.2f}")
+        columns[3].write(f"{row['距高点回撤']:.1%}")
+        if row["Ticker"] in alert_tickers:
+            columns[4].error("达到阈值")
+        else:
+            columns[4].success("正常")
+        columns[5].button(
+            "删除",
+            key=f"remove_{row['Ticker']}",
+            on_click=remove_from_watchlist,
+            args=(row["Ticker"],),
+            use_container_width=True,
+        )
+
+    st.markdown("#### 完整检测数据")
     st.dataframe(
         result,
         use_container_width=True,
