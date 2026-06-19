@@ -61,6 +61,23 @@ def is_data_fresh(status):
     return finished_date >= expected_date, finished_date, expected_date
 
 
+def format_market_cap(value):
+    try:
+        value = float(value)
+    except Exception:
+        return ""
+    if pd.isna(value) or value <= 0:
+        return ""
+    abs_value = abs(value)
+    if abs_value >= 1_000_000_000_000:
+        return f"${value / 1_000_000_000_000:.2f}T"
+    if abs_value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.2f}B"
+    if abs_value >= 1_000_000:
+        return f"${value / 1_000_000:.2f}M"
+    return f"${value:,.0f}"
+
+
 def render_momentum_radar(df, status, data_is_fresh, data_date, expected_market_date):
     st.sidebar.header("数据状态")
     if status:
@@ -128,12 +145,22 @@ def render_momentum_radar(df, status, data_is_fresh, data_date, expected_market_
             display_df[col] = display_df[col].map(lambda x: f"{x:.2%}")
     if "最新价" in display_df.columns:
         display_df["最新价"] = display_df["最新价"].map(lambda x: f"{x:.2f}")
+    if "市值" in display_df.columns:
+        display_df["市值"] = display_df["市值"].map(format_market_cap)
     if "成交量倍数" in display_df.columns:
         display_df["成交量倍数"] = display_df["成交量倍数"].map(lambda x: f"{x:.2f}x")
     if "20日平均成交额" in display_df.columns:
         display_df["20日平均成交额"] = display_df["20日平均成交额"].map(lambda x: f"{x:,.0f}")
 
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "公司主营": st.column_config.TextColumn(width="large"),
+            "市值": st.column_config.TextColumn(width="small"),
+        },
+    )
 
     csv = filtered_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(

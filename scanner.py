@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import numpy as np
 import pandas as pd
@@ -11,12 +11,13 @@ import yfinance as yf
 DATA_DIR = "data"
 RESULT_FILE = os.path.join(DATA_DIR, "latest_results.csv")
 STATUS_FILE = os.path.join(DATA_DIR, "latest_status.json")
+META_CACHE_FILE = os.path.join(DATA_DIR, "company_meta_cache.json")
+META_CACHE_DAYS = 7
 
 
 def load_tickers():
     tickers = []
 
-    # 1. Nasdaq listed stocks
     try:
         nasdaq_url = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
         nasdaq_df = pd.read_csv(nasdaq_url, sep="|")
@@ -28,7 +29,6 @@ def load_tickers():
     except Exception as e:
         print(f"Nasdaq 股票池读取失败: {e}")
 
-    # 2. Other listed stocks: NYSE / AMEX / Cboe
     try:
         other_url = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
         other_df = pd.read_csv(other_url, sep="|")
@@ -40,7 +40,6 @@ def load_tickers():
     except Exception as e:
         print(f"Other Listed 股票池读取失败: {e}")
 
-    # 3. Custom tickers
     try:
         with open("tickers.txt", "r", encoding="utf-8") as f:
             custom_tickers = [line.strip().upper() for line in f if line.strip()]
@@ -49,18 +48,15 @@ def load_tickers():
         print(f"自定义股票池读取失败: {e}")
 
     cleaned_tickers = []
-
     for ticker in tickers:
         ticker = str(ticker).strip().upper()
         ticker = ticker.replace(".", "-")
-
         if not ticker:
             continue
         if "$" in ticker or "^" in ticker:
             continue
         if len(ticker) > 5:
             continue
-
         cleaned_tickers.append(ticker)
 
     return list(dict.fromkeys(cleaned_tickers))
@@ -81,7 +77,6 @@ def analyze_one_ticker(ticker, df):
 
         avg_dollar_volume_20 = (close.iloc[-21:-1] * volume.iloc[-21:-1]).mean()
 
-        # 基础过滤：去掉低价、低流动性股票
         if latest_close < 5:
             return None
 
@@ -125,6 +120,8 @@ def analyze_one_ticker(ticker, df):
         return {
             "Ticker": ticker,
             "最新价": round(float(latest_close), 4),
+            "公司主营": "",
+            "市值": np.nan,
             "1日涨幅": float(one_day_return),
             "5日涨幅": float(five_day_return),
             "20日涨幅": float(twenty_day_return),
@@ -190,8 +187,93 @@ def download_and_scan(tickers, batch_size=200, sleep_seconds=2):
     return results, failed_batches, total_batches
 
 
+def clean_business_summary(value, limit=220):
+    text = " ".join(str(value or "").replace("\n", " ").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def load_meta_cache():
+    if not os.path.exists(META_CACHE_FILE):
+        return {}
+    try:
+        with open(META_CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_meta_cache(cache):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(META_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def cache_is_fresh(item):
+    fetched_at = item.get("fetched_at_utc")
+    if not fetched_at:
+        return False
+    try:
+        fetched_dt = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    except Exception:
+        return False
+    return datetime.now(timezone.utc) - fetched_dt < timedelta(days=META_CACHE_DAYS)
+
+
+def fetch_company_meta(ticker):
+    info = yf.Ticker(ticker).get_info()
+    sector = info.get("sector") or ""
+    industry = info.get("industry") or ""
+    summary = (
+        info.get("longBusinessSummary")
+        or info.get("businessSummary")
+        or " / ".join(part for part in [sector, industry] if part)
+        or ""
+    )
+    return {
+        "公司主营": clean_business_summary(summary),
+        "市值": info.get("marketCap") or np.nan,
+        "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def enrich_results_with_company_meta(results):
+    if not results:
+        return results
+
+    cache = load_meta_cache()
+    updated = False
+
+    for index, result in enumerate(results, start=1):
+        ticker = result["Ticker"]
+        meta = cache.get(ticker)
+
+        if not meta or not cache_is_fresh(meta):
+            try:
+                meta = fetch_company_meta(ticker)
+                cache[ticker] = meta
+                updated = True
+            except Exception as exc:
+                print(f"{ticker} 公司信息读取失败: {exc}")
+                meta = {"公司主营": "", "市值": np.nan}
+
+            if index % 25 == 0:
+                save_meta_cache(cache)
+            time.sleep(0.05)
+
+        result["公司主营"] = meta.get("公司主营", "")
+        result["市值"] = meta.get("市值", np.nan)
+
+    if updated:
+        save_meta_cache(cache)
+
+    return results
+
+
 def save_outputs(results, status):
     os.makedirs(DATA_DIR, exist_ok=True)
+    results = enrich_results_with_company_meta(results)
 
     if results:
         df = pd.DataFrame(results)
@@ -201,6 +283,8 @@ def save_outputs(results, status):
         df = pd.DataFrame(columns=[
             "Ticker",
             "最新价",
+            "公司主营",
+            "市值",
             "1日涨幅",
             "5日涨幅",
             "20日涨幅",
