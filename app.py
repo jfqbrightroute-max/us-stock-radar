@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
 from drawdown_watch import render_drawdown_watch
 
@@ -78,6 +79,64 @@ def format_market_cap(value):
     return f"${value:,.0f}"
 
 
+def clean_business_summary(value, limit=180):
+    text = " ".join(str(value or "").replace("\n", " ").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+def fetch_company_meta(ticker):
+    try:
+        info = yf.Ticker(ticker).get_info()
+    except Exception:
+        return {"公司主营": "", "市值": None}
+
+    sector = info.get("sector") or ""
+    industry = info.get("industry") or ""
+    summary = (
+        info.get("longBusinessSummary")
+        or info.get("businessSummary")
+        or " / ".join(part for part in [sector, industry] if part)
+        or ""
+    )
+    return {
+        "公司主营": clean_business_summary(summary),
+        "市值": info.get("marketCap"),
+    }
+
+
+def ensure_company_columns(frame):
+    if frame.empty or "Ticker" not in frame.columns:
+        return frame
+
+    result = frame.copy()
+    if "公司主营" not in result.columns:
+        result["公司主营"] = ""
+    if "市值" not in result.columns:
+        result["市值"] = pd.NA
+
+    needs_meta = (
+        result["公司主营"].fillna("").astype(str).str.strip().eq("")
+        | result["市值"].isna()
+    )
+    tickers = result.loc[needs_meta, "Ticker"].dropna().astype(str).str.upper().unique().tolist()
+    if not tickers:
+        return result
+
+    with st.spinner(f"正在补充 {len(tickers)} 只股票的公司主营和市值..."):
+        for ticker in tickers:
+            meta = fetch_company_meta(ticker)
+            mask = result["Ticker"].astype(str).str.upper() == ticker
+            if meta.get("公司主营"):
+                result.loc[mask, "公司主营"] = meta["公司主营"]
+            if meta.get("市值") is not None:
+                result.loc[mask, "市值"] = meta["市值"]
+
+    return result
+
+
 def render_momentum_radar(df, status, data_is_fresh, data_date, expected_market_date):
     st.sidebar.header("数据状态")
     if status:
@@ -130,6 +189,8 @@ def render_momentum_radar(df, status, data_is_fresh, data_date, expected_market_
         ]
     if sort_by in filtered_df.columns:
         filtered_df = filtered_df.sort_values(by=sort_by, ascending=ascending)
+
+    filtered_df = ensure_company_columns(filtered_df)
 
     st.subheader("扫描结果")
     col1, col2, col3, col4 = st.columns(4)
