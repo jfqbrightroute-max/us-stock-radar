@@ -1,3 +1,4 @@
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -6,6 +7,7 @@ import streamlit as st
 import yfinance as yf
 
 
+WATCHLIST_FILE = "watchlist.txt"
 PERIOD_LABELS = {
     "6mo": "近 6 个月",
     "1y": "近 1 年",
@@ -29,6 +31,33 @@ def normalize_ticker(value):
 def parse_tickers(value):
     tickers = re.split(r"[\s,，;；]+", str(value).upper())
     return list(dict.fromkeys(normalize_ticker(ticker) for ticker in tickers if normalize_ticker(ticker)))
+
+
+@st.cache_data(ttl=5 * 60, show_spinner=False)
+def load_default_watchlist():
+    if not os.path.exists(WATCHLIST_FILE):
+        return ["AAPL", "MSFT", "NVDA"]
+
+    tickers = []
+    with open(WATCHLIST_FILE, "r", encoding="utf-8") as file:
+        for line in file:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                tickers.extend(parse_tickers(line))
+    return list(dict.fromkeys(tickers)) or ["AAPL", "MSFT", "NVDA"]
+
+
+def get_initial_watchlist():
+    query_watch = st.query_params.get("watch", "")
+    if isinstance(query_watch, list):
+        query_watch = ",".join(query_watch)
+
+    query_tickers = parse_tickers(query_watch)
+    if query_tickers:
+        return query_tickers, "网址参数"
+
+    default_tickers = load_default_watchlist()
+    return default_tickers, "仓库 watchlist.txt"
 
 
 def read_uploaded_watchlist(uploaded_file):
@@ -106,7 +135,12 @@ def remove_from_watchlist(ticker):
 
 def render_drawdown_watch():
     st.subheader("关注股票回撤提醒")
-    st.caption("上传最新关注列表后，系统会抓取历史行情，并检查股票是否自周期高点回落达到 20%。")
+    st.caption("默认读取仓库里的 watchlist.txt。也可以上传 Excel/CSV、手动添加或删除股票。")
+
+    initial_tickers, initial_source = get_initial_watchlist()
+    if "current_watchlist" not in st.session_state:
+        st.session_state.current_watchlist = ",".join(initial_tickers)
+        st.session_state.watchlist_source = initial_source
 
     upload_col, settings_col = st.columns([2, 1])
     with upload_col:
@@ -124,13 +158,6 @@ def render_drawdown_watch():
         )
         threshold = st.slider("回撤提醒阈值", min_value=5, max_value=60, value=20, step=5)
 
-    saved_tickers = st.query_params.get("watch", "AAPL,MSFT,NVDA")
-    if isinstance(saved_tickers, list):
-        saved_tickers = ",".join(saved_tickers)
-    if "current_watchlist" not in st.session_state:
-        st.session_state.current_watchlist = saved_tickers
-
-    imported_tickers = []
     if uploaded_file is not None:
         try:
             uploaded_frame = read_uploaded_watchlist(uploaded_file)
@@ -150,6 +177,7 @@ def render_drawdown_watch():
                 if st.session_state.get("watchlist_upload_signature") != upload_signature:
                     st.session_state.current_watchlist = ",".join(imported_tickers)
                     st.session_state.watchlist_upload_signature = upload_signature
+                    st.session_state.watchlist_source = f"上传文件 {uploaded_file.name}"
                 st.success(
                     f"已从 `{uploaded_file.name}` 的 `{detected_column}` 列导入 "
                     f"{len(imported_tickers)} 只股票，并替换当前关注列表。"
@@ -177,6 +205,7 @@ def render_drawdown_watch():
             current = parse_tickers(st.session_state.current_watchlist)
             new_items = [ticker for ticker in additions if ticker not in current]
             st.session_state.current_watchlist = ",".join(current + new_items)
+            st.session_state.watchlist_source = "手动修改"
             if new_items:
                 st.success(f"已添加：{'、'.join(new_items)}")
             else:
@@ -187,7 +216,7 @@ def render_drawdown_watch():
         "当前关注列表",
         key="current_watchlist",
         height=100,
-        help="上传文件后会自动替换这里的列表，也可以继续手动添加或删除代码。",
+        help="默认来自 watchlist.txt。你也可以在这里手动添加或删除代码。",
     )
     tickers = parse_tickers(ticker_text)
 
@@ -199,7 +228,11 @@ def render_drawdown_watch():
         tickers = tickers[:MAX_TICKERS]
 
     st.query_params["watch"] = ",".join(tickers)
-    st.caption(f"本次将检查 {len(tickers)} 只股票。关注列表已写入当前网址，收藏页面可保留列表。")
+    st.caption(
+        f"本次将检查 {len(tickers)} 只股票。当前列表来源："
+        f"{st.session_state.get('watchlist_source', initial_source)}。"
+        "如果想让所有电脑默认一致，请更新 GitHub 仓库里的 watchlist.txt。"
+    )
 
     with st.spinner(f"正在抓取 {len(tickers)} 只股票的历史行情并计算回撤..."):
         rows, errors = load_all_drawdowns(tickers, period)
