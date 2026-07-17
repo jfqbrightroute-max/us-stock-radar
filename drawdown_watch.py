@@ -1,5 +1,6 @@
 import os
 import re
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
@@ -31,6 +32,58 @@ def normalize_ticker(value):
 def parse_tickers(value):
     tickers = re.split(r"[\s,，;；]+", str(value).upper())
     return list(dict.fromkeys(normalize_ticker(ticker) for ticker in tickers if normalize_ticker(ticker)))
+
+
+def write_watchlist(tickers):
+    cleaned = list(dict.fromkeys(ticker for ticker in tickers if ticker))
+    with open(WATCHLIST_FILE, "w", encoding="utf-8") as file:
+        file.write("# Default watchlist for US Stock Radar drawdown checks.\n")
+        file.write("# One ticker per line. Use Yahoo Finance symbols for non-US stocks.\n")
+        for ticker in cleaned:
+            file.write(f"{ticker}\n")
+    load_default_watchlist.clear()
+    st.session_state.current_watchlist = ",".join(cleaned)
+    st.session_state.watchlist_dirty = True
+    return cleaned
+
+
+def run_git_command(args):
+    completed = subprocess.run(
+        args,
+        cwd=os.getcwd(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    output = "\n".join(part for part in [completed.stdout.strip(), completed.stderr.strip()] if part)
+    return completed.returncode, output
+
+
+def sync_watchlist_to_github():
+    repo_dir = os.getcwd().replace("\\", "/")
+    run_git_command(["git", "config", "--global", "--add", "safe.directory", repo_dir])
+
+    code, output = run_git_command(["git", "status", "--short", "--", WATCHLIST_FILE])
+    if code != 0:
+        return False, output
+    if not output.strip():
+        st.session_state.watchlist_dirty = False
+        return True, "watchlist.txt already matches the local Git version."
+
+    code, output = run_git_command(["git", "add", WATCHLIST_FILE])
+    if code != 0:
+        return False, output
+
+    code, output = run_git_command(["git", "commit", "-m", "Update watchlist"])
+    if code != 0 and "nothing to commit" not in output.lower():
+        return False, output
+
+    code, output = run_git_command(["git", "push"])
+    if code != 0:
+        return False, output
+
+    st.session_state.watchlist_dirty = False
+    return True, output or "watchlist.txt synced to GitHub."
 
 
 @st.cache_data(ttl=5 * 60, show_spinner=False)
@@ -130,7 +183,7 @@ def load_all_drawdowns(tickers, period):
 
 def remove_from_watchlist(ticker):
     current = parse_tickers(st.session_state.get("current_watchlist", ""))
-    st.session_state.current_watchlist = ",".join(item for item in current if item != ticker)
+    write_watchlist([item for item in current if item != ticker])
 
 
 def render_drawdown_watch():
@@ -175,7 +228,7 @@ def render_drawdown_watch():
                 ))
                 upload_signature = f"{uploaded_file.name}:{uploaded_file.size}:{detected_column}"
                 if st.session_state.get("watchlist_upload_signature") != upload_signature:
-                    st.session_state.current_watchlist = ",".join(imported_tickers)
+                    write_watchlist(imported_tickers)
                     st.session_state.watchlist_upload_signature = upload_signature
                     st.session_state.watchlist_source = f"上传文件 {uploaded_file.name}"
                 st.success(
@@ -204,7 +257,7 @@ def render_drawdown_watch():
         else:
             current = parse_tickers(st.session_state.current_watchlist)
             new_items = [ticker for ticker in additions if ticker not in current]
-            st.session_state.current_watchlist = ",".join(current + new_items)
+            write_watchlist(current + new_items)
             st.session_state.watchlist_source = "手动修改"
             if new_items:
                 st.success(f"已添加：{'、'.join(new_items)}")
@@ -219,6 +272,26 @@ def render_drawdown_watch():
         help="默认来自 watchlist.txt。你也可以在这里手动添加或删除代码。",
     )
     tickers = parse_tickers(ticker_text)
+
+    save_col, sync_col = st.columns([1, 1])
+    with save_col:
+        if st.button("保存当前关注列表", use_container_width=True):
+            saved_tickers = write_watchlist(tickers)
+            st.success(f"已保存 {len(saved_tickers)} 只股票到 watchlist.txt")
+            st.rerun()
+    with sync_col:
+        sync_label = "同步到 GitHub"
+        if st.session_state.get("watchlist_dirty"):
+            sync_label = "同步到 GitHub（有未同步修改）"
+        if st.button(sync_label, use_container_width=True, type="secondary"):
+            ok, message = sync_watchlist_to_github()
+            if ok:
+                st.success("已同步到 GitHub。其他电脑重新拉取后会看到最新列表。")
+            else:
+                st.error("同步到 GitHub 失败。请确认这台电脑已经登录 GitHub，并且有仓库推送权限。")
+            if message:
+                with st.expander("同步详情"):
+                    st.code(message)
 
     if not tickers:
         st.warning("请上传关注列表，或手动输入至少一只股票。")
