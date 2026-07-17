@@ -34,7 +34,7 @@ def parse_tickers(value):
     return list(dict.fromkeys(normalize_ticker(ticker) for ticker in tickers if normalize_ticker(ticker)))
 
 
-def write_watchlist(tickers):
+def write_watchlist(tickers, auto_sync=True):
     cleaned = list(dict.fromkeys(ticker for ticker in tickers if ticker))
     with open(WATCHLIST_FILE, "w", encoding="utf-8") as file:
         file.write("# Default watchlist for US Stock Radar drawdown checks.\n")
@@ -44,6 +44,9 @@ def write_watchlist(tickers):
     load_default_watchlist.clear()
     st.session_state.current_watchlist = ",".join(cleaned)
     st.session_state.watchlist_dirty = True
+    if auto_sync:
+        ok, message = sync_watchlist_to_github()
+        st.session_state.watchlist_last_sync = {"ok": ok, "message": message}
     return cleaned
 
 
@@ -84,6 +87,19 @@ def sync_watchlist_to_github():
 
     st.session_state.watchlist_dirty = False
     return True, output or "watchlist.txt synced to GitHub."
+
+
+def render_watchlist_sync_status():
+    result = st.session_state.get("watchlist_last_sync")
+    if not result:
+        return
+    if result.get("ok"):
+        st.success("关注列表已自动同步到 GitHub。")
+        return
+    st.error("关注列表已保存到本地，但自动同步 GitHub 失败。")
+    if result.get("message"):
+        with st.expander("自动同步详情"):
+            st.code(result["message"])
 
 
 @st.cache_data(ttl=5 * 60, show_spinner=False)
@@ -194,6 +210,7 @@ def render_drawdown_watch():
     if "current_watchlist" not in st.session_state:
         st.session_state.current_watchlist = ",".join(initial_tickers)
         st.session_state.watchlist_source = initial_source
+    render_watchlist_sync_status()
 
     upload_col, settings_col = st.columns([2, 1])
     with upload_col:
@@ -285,6 +302,7 @@ def render_drawdown_watch():
             sync_label = "同步到 GitHub（有未同步修改）"
         if st.button(sync_label, use_container_width=True, type="secondary"):
             ok, message = sync_watchlist_to_github()
+            st.session_state.watchlist_last_sync = {"ok": ok, "message": message}
             if ok:
                 st.success("已同步到 GitHub。其他电脑重新拉取后会看到最新列表。")
             else:
