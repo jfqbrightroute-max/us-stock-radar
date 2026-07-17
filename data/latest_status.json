@@ -1,8 +1,8 @@
 {
-  "started_at_utc": "2026-07-16T00:57:05.065750+00:00",
-  "finished_at_utc": "2026-07-16T01:05:27.150131+00:00",
-  "ticker_count": 6983,
-  "signal_count": 361,
+  "started_at_utc": "2026-07-17T01:03:37.183400+00:00",
+  "finished_at_utc": "2026-07-17T01:15:02.721364+00:00",
+  "ticker_count": 6981,
+  "signal_count": 689,
   "total_batches": 35,
   "failed_batches": 0
 }
