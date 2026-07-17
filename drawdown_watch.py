@@ -202,6 +202,10 @@ def remove_from_watchlist(ticker):
     write_watchlist([item for item in current if item != ticker])
 
 
+def get_drawdown_value(row):
+    return list(row.values())[4]
+
+
 def render_drawdown_watch():
     st.subheader("关注股票回撤提醒")
     st.caption("默认读取仓库里的 watchlist.txt。也可以上传 Excel/CSV、手动添加或删除股票。")
@@ -212,7 +216,7 @@ def render_drawdown_watch():
         st.session_state.watchlist_source = initial_source
     render_watchlist_sync_status()
 
-    upload_col, settings_col = st.columns([2, 1])
+    upload_col, settings_col, sort_col = st.columns([2, 1, 1])
     with upload_col:
         uploaded_file = st.file_uploader(
             "上传最新关注列表",
@@ -227,6 +231,13 @@ def render_drawdown_watch():
             index=1,
         )
         threshold = st.slider("回撤提醒阈值", min_value=5, max_value=60, value=20, step=5)
+
+    with sort_col:
+        drawdown_sort = st.selectbox(
+            "回撤排序",
+            ["回撤从大到小", "回撤从小到大"],
+            index=0,
+        )
 
     if uploaded_file is not None:
         try:
@@ -327,6 +338,7 @@ def render_drawdown_watch():
 
     with st.spinner(f"正在抓取 {len(tickers)} 只股票的历史行情并计算回撤..."):
         rows, errors = load_all_drawdowns(tickers, period)
+    rows = sorted(rows, key=get_drawdown_value, reverse=(drawdown_sort == "回撤从小到大"))
 
     alerts = [row for row in rows if row["距高点回撤"] <= -(threshold / 100)]
     if alerts:
@@ -353,7 +365,7 @@ def render_drawdown_watch():
             "提醒状态": "回撤达到阈值" if row in alerts else "正常",
         }
         for row in rows
-    ).sort_values("距高点回撤")
+    )
 
     metric1, metric2, metric3 = st.columns(3)
     metric1.metric("成功检查股票数", len(rows))
@@ -366,7 +378,7 @@ def render_drawdown_watch():
         column.markdown(f"**{label}**")
 
     alert_tickers = {row["Ticker"] for row in alerts}
-    for row in sorted(rows, key=lambda item: item["距高点回撤"]):
+    for row in rows:
         columns = st.columns([1.2, 1.3, 1.3, 1.4, 1.4, 1])
         columns[0].write(row["Ticker"])
         columns[1].write(f"{row['最新价']:.2f}")
